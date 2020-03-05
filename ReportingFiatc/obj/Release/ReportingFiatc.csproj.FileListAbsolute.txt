@@ -1,0 +1,14 @@
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\bin\ReportingFiatc.dll
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\bin\ReportingFiatc.pdb
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\bin\AjaxControlToolkit.dll
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\bin\log4net.dll
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\bin\Newtonsoft.Json.dll
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\bin\log4net.xml
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\bin\Newtonsoft.Json.xml
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\obj\Release\ReportingFiatc.csprojResolveAssemblyReference.cache
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\obj\Release\RdlCompile.cache
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\obj\Release\RdlCompile.compiled
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\obj\Release\ReportingFiatc.dll
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\obj\Release\ReportingFiatc.pdb
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\bin\ReportDistribucionLlamadasEntrantes.rdlc
+C:\Users\vocalcom\Desktop\ReportingFiatc\ReportingFiatc\bin\VisionGeneralCampanas.rdlc
