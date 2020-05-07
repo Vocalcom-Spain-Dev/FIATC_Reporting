@@ -1,0 +1,226 @@
+USE [FIAT]
+GO
+/****** Object:  StoredProcedure [dbo].[Report_DistribucionLlamadasEntrantes]    Script Date: 07/05/2020 11:00:25 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+ALTER PROCEDURE [dbo].[Report_DistribucionLlamadasEntrantes] 
+@CustomerID int,
+@DateList nvarchar(MAX),
+@ListCampaigns nvarchar(MAX),
+@ServiceLevel int,
+@LostCalls int
+
+AS
+BEGIN
+	DECLARE @DateFrom nvarchar(50)
+	DECLARE @DateTo nvarchar(50)
+
+	--select @ListCampaigns
+
+	--TABLA DE TODOS LAS FECHAS Y RANGOS
+	DECLARE @Tblb TABLE
+	(
+		Fecha nvarchar(50)
+	)
+
+	--select * from @DateList
+	INSERT INTO @Tblb SELECT CAST(Data AS nvarchar(64)) AS DID FROM [dbo].[Vocalcom_GetTableFromSplitString](@DateList, ',') OPTION(MAXRECURSION 0)
+	--select * from @Tblb
+	
+	set @DateFrom =  (select MIN(CAST(CAST (Fecha AS NUMERIC(19,4)) AS INT))  from @Tblb)
+	set @DateTo =  (select MAX(CAST(CAST (Fecha AS NUMERIC(19,4)) AS INT))  from @Tblb)
+
+	--select  @DateFrom as Min
+	--select @DateTo as Max
+
+
+	-- CONVERT DATES TO UTC DATESSTRING
+	DECLARE @UTCDateFromString char(14) = [HN_Reporting].dbo.[GetDateString](DATEADD(Hour, - DATEDIFF(Hour, GETUTCDATE(), GETDATE()), @DateFrom))
+	DECLARE @UTCDateToString char(14) = [HN_Reporting].dbo.[GetDateString](DATEADD(Minute, 1439, @DateTo))
+	DECLARE @UTCDateFrom datetime = DATEADD(Hour, - DATEDIFF(Hour, GETUTCDATE(), GETDATE()), @DateFrom)
+	DECLARE @UTCDateTo datetime = DATEADD(Minute, 1439, @DateTo)
+
+	-- TABLA DE CAMPAÑAS
+	DECLARE @TableCampaigns TABLE (DID nvarchar(64))
+	INSERT INTO @TableCampaigns SELECT CAST([Data] AS nvarchar(64)) AS DID FROM [dbo].[Vocalcom_GetTableFromSplitString](@ListCampaigns, ',') OPTION(MAXRECURSION 0)
+	--SELECT * FROM @TableCampaigns
+
+	-- VARIABLES PARA CURSOR
+	DECLARE @ViewName nvarchar(255)
+	DECLARE @SQL nvarchar(MAX)
+	DECLARE @ODCalls nvarchar(MAX)
+
+	--CURSOR DE LLAMADAS ENTRANTES
+	DECLARE ODCalls_Cursor CURSOR FOR 
+	SELECT DISTINCT ViewName FROM HN_Reporting..GetQueryList('INBOUND', @UTCDateFromString, @UTCDateToString, @CustomerID)
+	CREATE TABLE #TableODCalls ( CallType int, UTime datetime, UTimeString varchar(14), LocalTime datetime, Indice numeric(18,0), Duration int, WaitDuration int, AgentId int, Queue int, Overflow int, Closed int, Number varchar(60), Transfer varchar(60), Rerout int, DID varchar(60), Campaign varchar(255), OnlineDuration int, WrapupDuration int, CallID char(32) ) 
+	CREATE NONCLUSTERED	INDEX ix_tempodcalls ON #TableODCalls (CallId);
+
+	OPEN ODCalls_Cursor
+	FETCH NEXT FROM ODCalls_Cursor
+	INTO @ViewName
+	WHILE @@fetch_status=0
+	BEGIN
+		
+		SET @ODCalls = REPLACE(@ViewName, 'VWINBOUNDCALLS', 'ODCalls')
+		--select @ODCalls
+		--select @ViewName
+	
+
+
+		SET @SQL = 'SELECT V.CallType, UTime ,UTimeString , CallLocalTime AS LocalTime, V.Indice , V.Duration ,V.WaitDuration ,AgentId ,Queue ,V.Overflow ,V.Closed ,Number ,Transfer ,Rerout ,DID ,Campaign, OnlineDuration ,V.WrapupDuration ,CallID 
+		FROM ' + @ViewName + ' V WITH (NOLOCK)
+		LEFT JOIN ' + @ODCalls + ' T WITH (NOLOCK) ON V.CallID = T.ID 
+		WHERE  V.CustomerID = ' + CAST(@CustomerID AS nvarchar(MAX)) + '
+		AND UTimeString >= ''' + @UTCDateFromString + ''' AND UTimeString < ''' + @UTCDateToString + ''''
+
+		INSERT INTO #TableODCalls (Calltype, UTime ,UTimeString ,LocalTime, Indice ,Duration ,WaitDuration ,AgentId ,Queue ,Overflow ,Closed ,Number ,Transfer ,Rerout ,DID ,Campaign ,OnlineDuration ,WrapupDuration, CallID)
+		EXEC sp_executesql @SQL
+		FETCH NEXT FROM ODCalls_Cursor
+		INTO @ViewName
+	END 
+	CLOSE ODCalls_Cursor;
+	DEALLOCATE ODCalls_Cursor;
+
+	--SELECT count(*) FROM @TableODCalls
+
+	Delete from #TableODCalls where Campaign not in (select * from @TableCampaigns)
+	Delete from #TableODCalls where REPLACE(CONVERT(CHAR(10), UTime, 23), '-', '') not in (select * from @Tblb)
+
+	--CURSOR DE IVR
+	DECLARE IVR_Cursor CURSOR FOR 
+	SELECT DISTINCT ViewName FROM HN_Reporting..GetQueryList('IVR', @UTCDateFromString, @UTCDateToString, @CustomerID)
+	CREATE TABLE #TableIVR  (UTime datetime, UTimeString varchar(14), IvrMessage nvarchar(250), CallID char(32))
+	CREATE NONCLUSTERED	INDEX ix_tempodcalls2 ON #TableIVR (CallId);
+	OPEN IVR_Cursor
+	FETCH NEXT FROM IVR_Cursor
+	INTO @ViewName
+	WHILE @@fetch_status=0
+	BEGIN
+		SET @SQL = 'SELECT UTime, UTimeString, IvrMessage, CallID
+		FROM ' + @ViewName + ' WITH (NOLOCK) 
+		WHERE CustomerID = ' + CAST(@CustomerID AS nvarchar(MAX)) + '
+		AND [IvrMessage] NOT IN (''@START@'',''@END@'')  
+		AND UTimeString >= ''' + @UTCDateFromString + ''' AND UTimeString < ''' + @UTCDateToString + ''''
+
+		INSERT INTO #TableIVR (UTime, UTimeString, IvrMessage, CallID)
+		EXEC sp_executesql @SQL
+		FETCH NEXT FROM IVR_Cursor
+		INTO @ViewName
+	END 
+	CLOSE IVR_Cursor;
+	DEALLOCATE IVR_Cursor;
+	--SELECT * FROM @TableIVR
+
+	Delete from #TableIVR where REPLACE(CONVERT(CHAR(10), UTime, 23), '-', '') not in (select * from @Tblb)
+
+	CREATE TABLE #TableLastMarkers  (CallID char(32), IvrMessage nvarchar(250)) 
+	CREATE NONCLUSTERED	INDEX ix_tempodcalls3 ON #TableLastMarkers (CallId);
+	INSERT INTO #TableLastMarkers (CallID, IvrMessage)
+	SELECT CallID, IvrMessage
+	FROM
+	(
+		SELECT CallID, IvrMessage
+		, ROW_NUMBER() OVER(PARTITION BY CallID ORDER BY UTime DESC) AS RowNum
+		FROM  #TableIVR
+	)T1
+	WHERE RowNum = 1
+
+	--SELECT count(*) FROM @TableLastMarkers
+
+	CREATE TABLE #TableData ( CallType int, UTime datetime, UTimeString varchar(14), LocalTime datetime, Indice numeric(18,0), Duration int, WaitDuration int, AgentId int, Queue int, Overflow int, Closed int, Number varchar(60), Transfer varchar(60), Rerout int, DID varchar(60), Campaign varchar(255), OnlineDuration int, WrapupDuration int, CallID char(32), IvrMessage nvarchar(250))  
+	CREATE NONCLUSTERED	INDEX ix_tempodcalls4 ON #TableData (CallId);
+	INSERT INTO #TableData
+	SELECT OC.* 
+	, (SELECT LM.IvrMessage FROM #TableLastMarkers LM WHERE OC.CallID = LM.CallID) IvrMessage
+	FROM #TableODCalls OC
+	--SELECT count(*) FROM @TableData
+
+	--Os detallamos la información requerida para los campos solicitados:
+	-- Recibidas; --Llamadas recibidas en la cola de agente (pasada la IVR)
+	-- Atendidas; --Llamadas atendidas por agente 
+	-- Atendidas < 30sec; --Llamadas atendidas antes del tiempo definido
+	-- Abandonadas; --Llamadas abandonas en la cola de agentes de la campaña (pasada la IVR)
+	-- Abandonadas > 10sec; --Llamadas abandonadas con un tiempo de espera superior al definido
+	-- NDA; --Nivel de atención del servicio (llamadas atendidas por agente / llamadas recibidas en la cola de agente (post IVR)
+	-- NDS; --Nivel de servicio (llamadas atendidas antes del tiempo definido / llamadas recibidas en la cola de agente (post IVR)
+	-- AHT; --Tiempo medio de duración de la llamada (desde el descuelgue hasta completar la codificación)
+	-- Tiempo medio abandono en cola; tiempo medio en que se abandona una llamada en la cola de agente (post IVR)
+	-- Tiempo medio de descuelgue; tiempo medio en que se descuelga una llamada por el agente desde que se enruta la misma al agente (sin contar tiempo en IVR)
+	-- Tiempo medio retención; tiempo medio de espera (con música) empleado en las llamadas
+	-- Tiempo medio de respuesta en cola; tiempo medio que se tarda en atender una llamada en la cola una vez pasada la IVR
+	-- Tiempo medio conversación; tiempo medio de duración de la conversación (sin contar tiempo dedicado a la cualificación de la llamada)
+	-- Tiempo medio de cualificación; tiempo medio empleado para la cualificación de las llamadas
+	-- Entrantes en IVR; Llamadas recibidas en la IVR
+	-- Resueltas en IVR; Llamadas que son resueltas en la IVR mediante gestión en la misma
+	-- Abandonos en IVR; Llamadas que son abandonadas en la IVR sin realizar gestión
+	-- Enrutadas a otra numeración; Llamadas redirigidas a otra numeración o servicio
+	-- Pasadas a cola; Llamadas que tras pasar por la IVR entran en la cola de agentes
+	-- Agentes conectados; Media de agentes conectados en el servicio en la franja 
+	-- Agentes disponibles Prom; Promedio de agentes disponibles en el servicio en la franja
+
+		SELECT (SELECT [Description] FROM [HN_Admin].[dbo].[ListCampaignInbound] CI WHERE T1.Campaign = CI.DID AND CI.customerId = @CustomerID) AS NomCamp
+	, T1.*
+	FROM 
+	(
+		SELECT Campaign, CONVERT(CHAR(10), UTime, 23) as Fecha
+		, SUM(CASE WHEN CallType = 1 THEN 1 ELSE 0 END) AS Entrantes_IVR
+		, SUM(CASE WHEN CallType = 1 AND [Queue] = 0 AND IvrMessage = 'timeout' THEN 1 ELSE 0 END) AS Fuera_Horario_IVR
+		, SUM(CASE WHEN CallType = 1 AND [Queue] = 0 AND IvrMessage = 'end' THEN 1 ELSE 0 END) AS Resueltas_IVR	
+		, SUM(CASE WHEN CallType = 1 AND [Queue] = 0 AND IvrMessage = 'transfer' THEN 1 ELSE 0 END) AS Enrutadas_IVR
+		, SUM(CASE WHEN CallType = 1 AND [Queue] = 0 AND (IvrMessage IS NULL OR IvrMessage <> 'timeout' OR IvrMessage = 'end' OR IvrMessage = 'transfer' OR IvrMessage = 'agent') THEN 1 ELSE 0 END) AS Abandonadas_IVR
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 THEN 1 ELSE 0 END) AS Recibidas 
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId <> 0 THEN 1 ELSE 0 END) AS Atendidas 
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId <> 0 AND WaitDuration < @ServiceLevel THEN 1 ELSE 0 END) AS Atendidas_NS 
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId = 0 THEN 1 ELSE 0 END) AS Abandonadas 
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId = 0 AND WaitDuration > @LostCalls THEN 1 ELSE 0 END) AS Abandonadas_LC 
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 THEN Duration ELSE 0 END) AS TT_Duracion 
+		, SUM(WaitDuration) AS TT_Espera
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId = 0 THEN WaitDuration ELSE 0 END) AS TT_Espera_Abandonadas
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId = 0 AND WaitDuration > @LostCalls THEN WaitDuration ELSE 0 END) AS TT_Espera_Abandonadas_LC
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId <> 0 THEN WaitDuration ELSE 0 END) AS TT_Espera_Atendidas
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId <> 0 AND WaitDuration < @ServiceLevel THEN WaitDuration ELSE 0 END) AS TT_Espera_Atendidas_NS
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId <> 0 THEN OnlineDuration ELSE 0 END) AS TT_Conversacion_Atendidas
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId <> 0 AND WaitDuration < @ServiceLevel THEN OnlineDuration ELSE 0 END) AS TT_Conversacion_Atendidas_NS
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId <> 0 THEN WrapupDuration ELSE 0 END) AS TT_ACW_Atendidas
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId <> 0 AND WaitDuration < @ServiceLevel THEN WrapupDuration ELSE 0 END) AS TT_ACW_Atendidas_NS
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId <> 0 THEN OnlineDuration + WrapupDuration ELSE 0 END) AS TT_Atencion_Atendidas
+		, SUM(CASE WHEN CallType = 1 AND [Queue] <> 0 AND AgentId <> 0 AND WaitDuration < @ServiceLevel THEN OnlineDuration + WrapupDuration ELSE 0 END) AS TT_Atencion_Atendidas_NS
+		FROM 
+		(
+			SELECT *
+			, CASE 
+			WHEN CAST(SUBSTRING(CONVERT(VARCHAR(5),LocalTime,114),4, 5) AS int) < 15 THEN SUBSTRING(CONVERT(VARCHAR(5),LocalTime,114),1, 2) + ':00 - ' + SUBSTRING(CONVERT(VARCHAR(5),LocalTime,114),1, 2) + ':15' 
+			WHEN CAST(SUBSTRING(CONVERT(VARCHAR(5),LocalTime,114),4, 5) AS int) < 30 THEN SUBSTRING(CONVERT(VARCHAR(5),LocalTime,114),1, 2) + ':15 - ' + SUBSTRING(CONVERT(VARCHAR(5),LocalTime,114),1, 2) + ':30' 
+			WHEN CAST(SUBSTRING(CONVERT(VARCHAR(5),LocalTime,114),4, 5) AS int) < 45 THEN SUBSTRING(CONVERT(VARCHAR(5),LocalTime,114),1, 2) + ':30 - ' + SUBSTRING(CONVERT(VARCHAR(5),LocalTime,114),1, 2) + ':45' 
+			ELSE SUBSTRING(CONVERT(VARCHAR(5),LocalTime,114),1, 2) + ':45 - ' + SUBSTRING(CONVERT(VARCHAR(5),DATEADD(HH,1,LocalTime),114),1, 2) + ':00' END AS Franja
+			FROM #TableData TD
+		)T2 
+		GROUP BY Campaign, CONVERT(CHAR(10), UTime, 23) 
+	)T1
+	ORDER BY Campaign, Fecha
+
+--USE [FIAT]
+--GO
+--DECLARE @CustomerID int
+--DECLARE @DateList nvarchar(max)
+--DECLARE @ListCampaigns nvarchar(max)
+--DECLARE @ServiceLevel int
+--DECLARE @LostCalls int
+--SET @CustomerID = 3
+--SET @DateList = '20200203,20200205'
+--SET @ListCampaigns = '6005'
+--SET @ServiceLevel = 20
+--SET @LostCalls = 0
+--EXECUTE [dbo].[Report_DistribucionLlamadasEntrantes] @CustomerID, @DateList, @ListCampaigns, @ServiceLevel, @LostCalls
+--GO
+
+END
+
+
+
+
